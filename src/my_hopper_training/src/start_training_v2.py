@@ -27,7 +27,6 @@ from stable_baselines3 import SAC
 # from stable_baselines3.common.env_util import make_vec_env
 from stable_baselines3.common.env_checker import check_env
 from stable_baselines3.common.callbacks import CheckpointCallback
-from stable_baselines3.common.buffers import ReplayBuffer
 
 if __name__ == '__main__':
     
@@ -53,36 +52,25 @@ if __name__ == '__main__':
     checkpoint_cb = CheckpointCallback(
     save_freq=25000,
     save_path="/root/monoped_ws/models/",
-    name_prefix="monoped_FINAL_HOP",
+    name_prefix="monoped_JUMP",
     verbose=2
     )
 
-    model = SAC.load("/root/monoped_ws/models/monoped_FINAL_HOP_50000_steps",
-         env=env,
-         custom_objects={
-             "ent_coef": 0.15,
-             "learning_rate": 2e-4,
-             "action_space": env.action_space
-         })
-
-    model.replay_buffer = ReplayBuffer(
-        model.buffer_size,
-        model.observation_space,
-        model.action_space,
-        device=model.device,
-        n_envs=1,
-        optimize_memory_usage=model.replay_buffer.optimize_memory_usage,
-    )
-
-    model.learn(total_timesteps=200000, log_interval=4, callback=checkpoint_cb)
-    model.save("/root/monoped_ws/models/monoped_FINAL_HOP")
-    model.save_replay_buffer("/root/monoped_ws/models/monoped_FINAL_HOP_buffer")
+    model = SAC.load("/root/monoped_ws/models/monoped_phase1_stand_b",
+             env=env,
+             custom_objects={
+                 "ent_coef": 0.3,
+                 "action_space": env.action_space
+             })
 
     # model = SAC("MlpPolicy", env, verbose=1,
     #         tensorboard_log="/root/monoped_ws/logs/",
     #         ent_coef=0.3,
     #         learning_rate=3e-4,
     #         batch_size=256)
+    model.learn(total_timesteps=150000, log_interval=4, callback=checkpoint_cb)
+    model.save("/root/monoped_ws/models/monoped_JUMP")
+    model.save_replay_buffer("/root/monoped_ws/models/monoped_JUMP_buffer")
 
     # del model # remove to demonstrate saving and loading
     # model = TD3.load("rl_monoped")
