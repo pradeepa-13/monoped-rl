@@ -9,7 +9,7 @@ rospy.init_node('monoped_inference', anonymous=True, log_level=rospy.INFO)
 
 env = gym.make('Monoped-v0')
 
-model = SAC.load("/root/monoped_ws/models/monoped_JUMP_d")
+model = SAC.load("/root/monoped_ws/models/monoped_JUMP")
 
 obs = env.reset()
 while True:
