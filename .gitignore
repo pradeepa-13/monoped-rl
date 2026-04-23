@@ -1,0 +1,8 @@
+build_isolated/
+devel_isolated/
+install_isolated/
+build/
+devel/
+*.pyc
+__pycache__/
+logs/
