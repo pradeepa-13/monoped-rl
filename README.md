@@ -1,5 +1,10 @@
 # Monoped RL Hopping
 
+## Building the workspace (first time only)
+cd /root/monoped_ws
+catkin_make_isolated --install
+source devel_isolated/setup.sh
+
 ## Docker Setup
 docker run -it --rm \
   --name monoped_session \
@@ -20,6 +25,10 @@ roslaunch my_legged_robots_sims main.launch
 cd src/my_hopper_training/src
 roslaunch my_hopper_training main.launch
 
-## Terminal 2 — Run Inference
+## Terminal 2 — Running Inference
+Copy the trained model into the container first:
+docker cp models_export/monoped_JUMP_d.zip monoped_session:/root/monoped_ws/models/
+
+Then inside the container:
 cd src/my_hopper_training/src
 python3 inference.py
