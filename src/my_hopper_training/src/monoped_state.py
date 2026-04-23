@@ -214,10 +214,17 @@ class MonopedState(object):
         return euler_rpy
 
     def get_distance_from_point(self, p_end):
-        # XY-only — Z not relevant for drift/position holding
-        dx = self.base_position.x - p_end.x
-        dy = self.base_position.y - p_end.y
-        return numpy.sqrt(dx**2 + dy**2)
+        """
+        Given a Vector3 Object, get distance from current position
+        :param p_end:
+        :return:
+        """
+        a = numpy.array((self.base_position.x, self.base_position.y, self.base_position.z))
+        b = numpy.array((p_end.x, p_end.y, p_end.z))
+
+        distance = numpy.linalg.norm(a - b)
+
+        return distance
 
     def get_contact_force_magnitude(self):
         """
@@ -256,10 +263,8 @@ class MonopedState(object):
         :param msg:
         :return:
         """
-        if msg.states:
-            self.contact_force = msg.states[-1].total_wrench.force
-        else:
-            self.contact_force = Vector3()   # zero force = airborne
+        for state in msg.states:
+            self.contact_force = state.total_wrench.force
 
     def joints_state_callback(self,msg):
         self.joints_state = msg
@@ -270,36 +275,47 @@ class MonopedState(object):
         return height_ok
 
     def monoped_orientation_ok(self):
+
         orientation_rpy = self.get_base_rpy()
         roll_ok = self._abs_max_roll > abs(orientation_rpy.x)
         pitch_ok = self._abs_max_pitch > abs(orientation_rpy.y)
-        return roll_ok and pitch_ok
+        orientation_ok = roll_ok and pitch_ok
+        return orientation_ok
 
     def calculate_reward_joint_position(self, weight=1.0):
-        # r1: penalize HAA lateral sway only
+        """
+        Only penalize HAA (lateral sway joint) for deviating from 0.
+        KFE and HFE are NOT penalized here — they need to bend for balance and jumping.
+        """
         haa_pos = abs(self.joints_state.position[0])
-        return weight * haa_pos
+        reward = weight * haa_pos
+        rospy.logdebug("calculate_reward_joint_position>>reward=" + str(reward))
+        return reward
 
     def calculate_reward_knee_bend(self, weight=1.0):
-        # matches stand_b posture — not too deep, not too shallow
         hfe = self.joints_state.position[1]
         kfe = self.joints_state.position[2]
-        hfe_target = 0.6
-        kfe_target = -0.6
-        hfe_r = math.exp(-6.0 * (hfe - hfe_target)**2)
-        kfe_r = math.exp(-6.0 * (kfe - kfe_target)**2)
-        return weight * (hfe_r + kfe_r)
-
-    def calculate_reward_velocity_smoothness(self, weight=1.0):
-        vel_penalty = 0.0
-        for v in self.joints_state.velocity:
-            vel_penalty += v**2
-        return weight * vel_penalty
+        # HFE should be positive, KFE should be negative
+        # Reward their coordinated opposite-direction bend
+        # Use the product — positive only when both have correct signs
+        coordination = hfe * (-kfe)   # positive when hfe>0 and kfe<0
+        reward = weight * max(0.0, coordination)
+        return reward
 
     def calculate_reward_joint_effort(self, weight=1.0):
-        # r2: penalize energy use
-        effort = sum(abs(e) for e in self.joints_state.effort)
-        return weight * effort
+        """
+        We calculate reward base on the joints effort readings. The more near 0 the better.
+        :return:
+        """
+        acumulated_joint_effort = 0.0
+        for joint_effort in self.joints_state.effort:
+            # Abs to remove sign influence, it doesnt matter the direction of the effort.
+            acumulated_joint_effort += abs(joint_effort)
+            rospy.logdebug("calculate_reward_joint_effort>>joint_effort=" + str(joint_effort))
+            rospy.logdebug("calculate_reward_joint_effort>>acumulated_joint_effort=" + str(acumulated_joint_effort))
+        reward = weight * acumulated_joint_effort
+        rospy.logdebug("calculate_reward_joint_effort>>reward=" + str(reward))
+        return reward
 
     def calculate_reward_contact_force(self, weight=1.0):
         """
@@ -321,60 +337,47 @@ class MonopedState(object):
         return reward
 
     def calculate_reward_orientation(self, weight=1.0):
-        # r4: penalize tilt and yaw
-        rpy = self.get_base_rpy()
-        accumulated = abs(rpy.x) + abs(rpy.y) + 2.0 * abs(rpy.z)
-        return weight * accumulated
+        """
+        We calculate the reward based on the orientation.
+        The more its closser to 0 the better because it means its upright
+        desired_yaw is the yaw that we want it to be.
+        to praise it to have a certain orientation, here is where to set it.
+        :return:
+        """
+        curren_orientation = self.get_base_rpy()
+        yaw_displacement = curren_orientation.z - self._desired_yaw
+        rospy.logdebug("calculate_reward_orientation>>[R,P,Y]=" + str(curren_orientation))
+        acumulated_orientation_displacement = abs(curren_orientation.x) + abs(curren_orientation.y) + abs(yaw_displacement)
+        reward = weight * acumulated_orientation_displacement
+        rospy.logdebug("calculate_reward_orientation>>reward=" + str(reward))
+        return reward
 
     def calculate_reward_distance_from_des_point(self, weight=1.0):
-        # r5: XY drift only
         dx = self.base_position.x - self.desired_world_point.x
         dy = self.base_position.y - self.desired_world_point.y
-        return weight * math.sqrt(dx**2 + dy**2)
+        distance = numpy.sqrt(dx**2 + dy**2)
+        reward = weight * distance
+        return reward
 
     def calculate_total_reward(self):
+        
         r1 = self.calculate_reward_joint_position(self._weight_r1)
         r2 = self.calculate_reward_joint_effort(self._weight_r2)
         r4 = self.calculate_reward_orientation(self._weight_r4)
         r_height = self.calculate_reward_height(self._weight_r6)
         r_knee = self.calculate_reward_knee_bend(weight=3.0)
         r_jump = self.calculate_reward_jump()
-        r_dist = self.calculate_reward_distance_from_des_point(self._weight_r5)
 
-        total_reward = self._alive_reward + r_height + r_knee + r_jump - r1 - r2 - r4
+        total_reward = self._alive_reward + r_height + r_jump - r1 - r2 - r4
 
         rospy.logdebug("###############")
-        rospy.logdebug("alive=" + str(self._alive_reward))
         rospy.logdebug("r_height=" + str(r_height))
         rospy.logdebug("r_knee=" + str(r_knee))
         rospy.logdebug("r_jump=" + str(r_jump))
-        rospy.logdebug("r1=" + str(r1))
-        rospy.logdebug("r2=" + str(r2))
-        rospy.logdebug("r4=" + str(r4))
-        rospy.logdebug("r_dist=" + str(r_dist))
         rospy.logdebug("total_reward=" + str(total_reward))
         rospy.logdebug("###############")
 
         return total_reward
-
-    def _get_jump_reward(self):
-        contact = self.get_contact_force_magnitude()
-        is_airborne = contact < 1.0
-        r = 0.0
-        if is_airborne:
-            if not self._was_airborne:
-                self._was_airborne = True
-            r = 3.0
-        else:
-            if self._was_airborne:
-                if 2.0 < contact < 15.0:
-                    r = 5.0    # clean landing
-                else:
-                    r = -2.0   # slam
-                self._was_airborne = False
-            if 2.0 < contact < 12.0:
-                r += 0.5
-        return r
     
     def reset_jump_state(self):
         self._was_airborne = False
@@ -382,38 +385,44 @@ class MonopedState(object):
         self._liftoff_height = 0.0
         self._liftoff_compression = 0.0
     
-    # def calculate_reward_forward_progress(self):
-    #     x = self.base_position.x
-    #     y = self.base_position.y
-    #     horizontal_displacement = numpy.sqrt(x**2 + y**2)
-    #     reward = 0.8 * horizontal_displacement    # was 1.5
-    #     return reward
+    def calculate_reward_forward_progress(self):
+        x = self.base_position.x
+        y = self.base_position.y
+        horizontal_displacement = numpy.sqrt(x**2 + y**2)
+        reward = 0.8 * horizontal_displacement    # was 1.5
+        return reward
     
     def calculate_reward_jump(self):
         contact = self.get_contact_force_magnitude()
-        is_airborne = contact < 1.0
+        height = self.get_base_height()
+        standing_baseline = 0.45
+        is_airborne = contact < 2.0
         reward = 0.0
+
         if is_airborne:
             if not self._was_airborne:
+                self._liftoff_height = height
                 self._was_airborne = True
-            reward = 4.0
+            reward = 15.0 * max(0.0, height - standing_baseline)
         else:
             if self._was_airborne:
-                if 2.0 < contact < 15.0:
-                    reward = 6.0    # clean landing
-                else:
-                    reward = -2.0
+                if self._liftoff_height > standing_baseline + 0.05:
+                    reward = 20.0
                 self._was_airborne = False
                 self._liftoff_height = 0.0
-            if 2.0 < contact < 12.0:
-                reward += 1.0
-        return reward
 
+        return reward
+    
     def calculate_reward_height(self, weight=1.0):
-        # r6: Gaussian centered at stand_b's natural crouch height
+        """
+        Reward being close to target_height (slightly crouched).
+        Gaussian-shaped: peaks at target, zero if error >= 0.2m.
+        This prevents straight-leg being optimal and allows
+        compression phase of jump without heavy penalty.
+        """
         height = self.get_base_height()
-        target_height = 0.55    # matches stand_b posture in your image
-        reward = weight * math.exp(-3.0 * (height - target_height)**2)
+        reward = weight * height
+        rospy.logdebug("calculate_reward_height>>reward=" + str(reward))
         return reward
 
 
@@ -493,9 +502,10 @@ class MonopedState(object):
         action_position[1] = joint_states_position[1] + action[1]
         action_position[2] = joint_states_position[2] + action[2]
 
-        action_position[0] = numpy.clip(action_position[0], -0.1,  0.1)
-        action_position[1] = numpy.clip(action_position[1],  0.2,  0.95)
-        action_position[2] = numpy.clip(action_position[2], -0.95, -0.1)  # range covers -0.45 target
+        # Clamp to prevent extreme joint configurations
+        action_position[0] = numpy.clip(action_position[0], -0.5, 0.5)   # HAA
+        action_position[1] = numpy.clip(action_position[1],  0.0, 1.0)   # HFE: was 1.0
+        action_position[2] = numpy.clip(action_position[2], -1.0, 0.0)   # KFE: was -1.0 only
 
         return action_position
 
