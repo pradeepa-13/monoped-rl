@@ -23,4 +23,8 @@ weight_r2: 0.001         # tiny penalty for high torques (smooth motion)
 weight_r3: 0.0            # contact force ignored for now
 weight_r4: 0.3
 weight_r5: 0.0            # small penalty for horizontal drift (stays near origin)
+<<<<<<< Updated upstream
 weight_r6: 3.0
+=======
+weight_r6: 3.0
+>>>>>>> Stashed changes
